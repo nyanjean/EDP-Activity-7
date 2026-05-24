@@ -1554,32 +1554,45 @@
 
 <script>
 
-let ACCOUNTS = [
-  {id:1,fname:'Admin',lname:'User',email:'admin@cattleya.com',password:'admin123',role:'Admin',status:'Active',created:'2024-01-10'},
-  {id:2,fname:'Maria',lname:'Santos',email:'maria@cattleya.com',password:'staff123',role:'Staff',status:'Active',created:'2024-02-15'},
-  {id:3,fname:'Juan',lname:'Dela Cruz',email:'juan@cattleya.com',password:'staff123',role:'Staff',status:'Inactive',created:'2024-03-01'},
-  {id:4,fname:'Ana',lname:'Reyes',email:'ana@cattleya.com',password:'staff123',role:'Staff',status:'Active',created:'2024-04-20'},
-];
-let nextUserId = 5;
-let currentUser = null;
+let ACCOUNTS = [];
+async function loadAccounts() {
+  const res = await fetch('fetch_users.php');
+  ACCOUNTS = await res.json();
+  renderUserTable();
+}
 
-let ORDERS = [
-  {id:'ORD001',menuId:'C01',category:'C',qty:2,customer:'Pedro Reyes',date:'2025-05-10',notes:'Extra crispy',status:'Completed'},
-  {id:'ORD002',menuId:'B02',category:'B',qty:1,customer:'Ana Santos',date:'2025-05-11',notes:'',status:'Completed'},
-  {id:'ORD003',menuId:'S02',category:'S',qty:3,customer:'Carlo Tan',date:'2025-05-12',notes:'Less salt',status:'Pending'},
-  {id:'ORD004',menuId:'B05',category:'B',qty:2,customer:'Liza Cruz',date:'2025-05-13',notes:'',status:'Pending'},
-  {id:'ORD005',menuId:'C03',category:'C',qty:1,customer:'Ben Soriano',date:'2025-05-14',notes:'',status:'Cancelled'},
-];
-let nextOrdId = 6;
+let ORDERS = [];
+async function loadOrders() {
+  const res = await fetch('fetch_inventorylog.php');
+  const logs = await res.json();
+  ORDERS = logs.filter(l => l.TransactionType === 'Sale').map(l => ({
+    id: l.InventoryLogID,
+    menuId: l.MenuID,
+    category: l.MenuID ? l.MenuID[0] : '?',
+    qty: l.TransactionQuantity,
+    date: l.TransactionDate,
+    status: 'Completed',
+    ingredient: l.IngredientName,
+    unit: l.Unit
+  }));
+  renderOrders();
+  renderDash();
+}
 
-let RESTOCKS = [
-  {id:'RST001',ingId:'I01',qty:100,unit:'pcs',supplier:'PoultryFresh PH',receivedBy:'Admin User',date:'2025-05-08'},
-  {id:'RST002',ingId:'I03',qty:200,unit:'pcs',supplier:'BunHaus Manila',receivedBy:'Maria Santos',date:'2025-05-09'},
-  {id:'RST003',ingId:'I07',qty:25,unit:'kg',supplier:'RiceDepot NCR',receivedBy:'Admin User',date:'2025-05-10'},
-  {id:'RST004',ingId:'I04',qty:5,unit:'kg',supplier:'GreenLeaf Farms',receivedBy:'Ana Reyes',date:'2025-05-12'},
-  {id:'RST005',ingId:'I10',qty:3,unit:'kg',supplier:'GreenLeaf Farms',receivedBy:'Ana Reyes',date:'2025-05-13'},
-];
-let nextRstId = 6;
+let RESTOCKS = [];
+async function loadRestocks() {
+  const res = await fetch('fetch_inventorylog.php');
+  const logs = await res.json();
+  RESTOCKS = logs.filter(l => l.TransactionType === 'Restock').map(l => ({
+    id: l.InventoryLogID,
+    ingId: l.InventoryID,   // InventoryID maps to the inventory row
+    qty: l.TransactionQuantity,
+    unit: l.Unit || '',
+    supplier: '—',          // not stored in DB, omit or add later
+    date: l.TransactionDate
+  }));
+  renderRestocks();
+}
 
 const MENU_DATA = [
   ['MI001','C01','I01',1.00],['MI002','C01','I05',50.00],['MI003','C02','I01',2.00],
