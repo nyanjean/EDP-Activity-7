@@ -1555,479 +1555,902 @@
 <script>
 
 let ACCOUNTS = [];
-async function loadAccounts() {
-  const res = await fetch('fetch_users.php');
-  ACCOUNTS = await res.json();
-  renderUserTable();
-}
-
 let ORDERS = [];
-async function loadOrders() {
-  const res = await fetch('fetch_inventorylog.php');
-  const logs = await res.json();
-  ORDERS = logs.filter(l => l.TransactionType === 'Sale').map(l => ({
-    id: l.InventoryLogID,
-    menuId: l.MenuID,
-    category: l.MenuID ? l.MenuID[0] : '?',
-    qty: l.TransactionQuantity,
-    date: l.TransactionDate,
-    status: 'Completed',
-    ingredient: l.IngredientName,
-    unit: l.Unit
-  }));
-  renderOrders();
-  renderDash();
-}
-
 let RESTOCKS = [];
-async function loadRestocks() {
-  const res = await fetch('fetch_inventorylog.php');
-  const logs = await res.json();
-  RESTOCKS = logs.filter(l => l.TransactionType === 'Restock').map(l => ({
-    id: l.InventoryLogID,
-    ingId: l.InventoryID,   // InventoryID maps to the inventory row
-    qty: l.TransactionQuantity,
-    unit: l.Unit || '',
-    supplier: '—',          // not stored in DB, omit or add later
-    date: l.TransactionDate
-  }));
-  renderRestocks();
-}
-
 let MENU_DATA = [];
 let ING_NAMES = {};
 let MENU_NAMES = {};
+let currentUser = null; 
+
+async function loadAccounts() {
+  try {
+    const res = await fetch('fetch_users.php');
+    const data = await res.json();
+    
+    ACCOUNTS = data.map(u => ({
+      id: u.user_id,
+      username: u.username,
+      email: u.email,
+      fname: u.first_name || '',        
+      lname: u.last_name || '',         
+      role: u.role || 'Staff',
+      status: u.status || 'Active'
+    }));
+    
+    if (typeof renderUserTable === "function") renderUserTable();
+    
+  } catch (err) {
+    console.error("Error loading accounts from database:", err);
+  }
+}
+
+async function loadApplicationLogs() {
+  try {
+    const res = await fetch('fetch_logs.php');
+    const logs = await res.json();
+    
+    ORDERS = logs.filter(l => l.transaction_type === 'Sale').map(l => ({
+      id: l.log_id,
+      menuId: l.menu_id,
+      category: typeof getCat === 'function' ? getCat(l.menu_id) : (l.category || 'C'), 
+      qty: parseInt(l.quantity) || 0,
+      customer: l.customer || 'Walk-In Customer',
+      date: l.transaction_date,
+      notes: l.notes || '',                        
+      status: l.status || 'Completed'                        
+    }));
+    
+    RESTOCKS = logs.filter(l => l.transaction_type === 'Restock').map(l => {
+      const rawId = String(l.inv_id || '');
+      const mappedIngredientId = rawId ? ('I' + rawId.replace('INV', '')) : '';
+      
+      return {
+        id: l.log_id,
+        ingId: mappedIngredientId, 
+        qty: parseFloat(l.quantity) || 0,
+        unit: l.unit || 'pcs',              
+        supplier: l.supplier || 'Main Warehouse', 
+        date: l.transaction_date,
+        receivedBy: l.operator_name || 'Admin'
+      };
+    });
+    
+    // Synchronize UI views concurrently
+    if (typeof renderOrders === "function") renderOrders();
+    if (typeof renderRestocks === "function") renderRestocks();
+    if (typeof updateDashboard === "function") updateDashboard();
+    
+  } catch (err) {
+    console.error("Error running application transaction logs initialization:", err);
+  }
+}
 
 window.addEventListener('DOMContentLoaded', () => {
     fetch('fetch_menu_ingredients.php')
         .then(res => res.json())
         .then(data => {
-  
-            MENU_DATA = data.MENU_DATA;
-            ING_NAMES = data.ING_NAMES;
-            MENU_NAMES = data.MENU_NAMES;
+            MENU_DATA = data.MENU_DATA || [];
+            ING_NAMES = data.ING_NAMES || {};
+            MENU_NAMES = data.MENU_NAMES || {};
+            console.log("Database definitions successfully initialized.");
 
-            console.log("Database recipes loaded successfully!");
-          
+            loadAccounts();
+            loadApplicationLogs();
         })
-        .catch(err => console.error('Error fetching database recipe elements:', err));
+        .catch(err => console.error('Error fetching database elements:', err));
 });
 
-function today() { return new Date().toISOString().split('T')[0]; }
-function getCat(menuId) { return menuId[0]; }
-function catLabel(c) { return c==='C'?'Chicken':c==='B'?'Burger':'Side'; }
-function catBadge(c) { return c==='S'?'badge-p':'badge-g'; }
-function pad(n,l=3) { return String(n).padStart(l,'0'); }
-
+function today() { 
+  const local = new Date();
+  const offset = local.getTimezoneOffset();
+  const localDate = new Date(local.getTime() - (offset * 60 * 1000));
+  return localDate.toISOString().split('T')[0]; 
+}
+  
 function show(page) {
-  document.querySelectorAll('.screen').forEach(s=>s.classList.add('hidden'));
-  const el = document.getElementById('screen-'+page);
-  if(el) el.classList.remove('hidden');
+  document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+  const el = document.getElementById('screen-' + page);
+  if (el) el.classList.remove('hidden');
+  
   const topbar = document.getElementById('topbar');
-  if(page==='login'||page==='recovery') {
+  if (!topbar) return;
+
+  if (page === 'login' || page === 'recovery') {
     topbar.classList.add('hidden');
   } else {
     topbar.classList.remove('hidden');
-    document.querySelectorAll('.topbar-nav button').forEach(b=>b.classList.remove('active'));
-    const nav = document.getElementById('nav-'+page);
-    if(nav) nav.classList.add('active');
+    document.querySelectorAll('.topbar-nav button').forEach(b => b.classList.remove('active'));
+    const nav = document.getElementById('nav-' + page);
+    if (nav) nav.classList.add('active');
   }
-  if(page==='report') {
-    filterReport();
-    renderOrdersReport();
-    renderRestocksReport();
+
+  if (page === 'report') {
+    if (typeof filterReport === "function") filterReport();
+    if (typeof renderOrdersReport === "function") renderOrdersReport();
+    if (typeof renderRestocksReport === "function") renderRestocksReport();
   }
-  if(page==='users') renderUserTable();
-  if(page==='orders') renderOrders();
-  if(page==='restock') renderRestocks();
-  if(page==='dashboard') updateDashboard();
+  if (page === 'users' && typeof renderUserTable === "function") renderUserTable();
+  if (page === 'orders' && typeof renderOrders === "function") renderOrders();
+  if (page === 'restock' && typeof renderRestocks === "function") renderRestocks();
+  if (page === 'dashboard' && typeof updateDashboard === "function") updateDashboard();
 }
 
-function toast(msg, isErr=false, dur=2800) {
+function toast(msg, isErr = false, dur = 2800) {
   const el = document.getElementById('toast');
+  if (!el) return;
   el.textContent = msg;
-  el.className = 'show'+(isErr?' err':'');
-  setTimeout(()=>el.className='', dur);
+  el.className = 'show' + (isErr ? ' err' : '');
+  setTimeout(() => el.className = '', dur);
 }
 
+function nextRelId(xml) {
+  const matches = xml.match(/Id="rId(\d+)"/g);
+  if (!matches) return 'rId1';
+  const ids = matches.map(m => parseInt(m.replace(/\D/g, '')));
+  return `rId${Math.max(...ids) + 1}`;
+}
+
+function addOverrideType(xml, partName, contentType) {
+  if (xml.includes(partName)) return xml;
+  const override = `<Override PartName="${partName}" ContentType="${contentType}"/>`;
+  return xml.replace('</Types>', `${override}</Types>`);
+}
+
+  
 function switchTab(tabId, btn) {
   const parent = btn.closest('.content') || document;
-  parent.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
-  btn.closest('.tab-row').querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById(tabId).classList.add('active');
+  parent.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.closest('.tab-row').querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  
+  const targetPanel = document.getElementById(tabId);
+  if (targetPanel) targetPanel.classList.add('active');
   btn.classList.add('active');
-  if(tabId==='tab-list') renderUserTable();
-  if(tabId==='tab-ord-list') renderOrders();
-  if(tabId==='tab-rst-list') renderRestocks();
-  if(tabId==='tab-rpt-menu') filterReport();
-  if(tabId==='tab-rpt-orders') renderOrdersReport();
-  if(tabId==='tab-rpt-restocks') renderRestocksReport();
+
+  if (tabId === 'tab-list' && typeof renderUserTable === "function") renderUserTable();
+  if (tabId === 'tab-ord-list' && typeof renderOrders === "function") renderOrders();
+  if (tabId === 'tab-rst-list' && typeof renderRestocks === "function") renderRestocks();
+  if (tabId === 'tab-rpt-menu' && typeof filterReport === "function") filterReport();
+  if (tabId === 'tab-rpt-orders' && typeof renderOrdersReport === "function") renderOrdersReport();
+  if (tabId === 'tab-rpt-restocks' && typeof renderRestocksReport === "function") renderRestocksReport();
 }
 
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+function closeModal(id) { 
+  const el = document.getElementById(id);
+  if (el) el.classList.add('hidden'); 
+}
 
-function doLogin() {
+async function doLogin() {
   const email = document.getElementById('l-email').value.trim();
   const pass  = document.getElementById('l-pass').value;
   const errEl = document.getElementById('login-err');
-  if(!email||!pass) { errEl.textContent='Please enter email and password.'; errEl.classList.remove('hidden'); return; }
-  const user = ACCOUNTS.find(u=>u.email===email&&u.password===pass);
-  if(!user) { errEl.textContent='Invalid credentials.'; errEl.classList.remove('hidden'); return; }
-  if(user.status==='Inactive') { errEl.textContent='Account is inactive.'; errEl.classList.remove('hidden'); return; }
-  errEl.classList.add('hidden');
-  currentUser = user;
-  document.getElementById('topbar-initials').textContent = user.fname[0]+user.lname[0];
-  document.getElementById('topbar-username').textContent = user.fname+' '+user.lname;
-  toast(`Welcome back, ${user.fname}! 🌿`);
-  document.getElementById('ord-date').value = today();
-  document.getElementById('rst-date').value = today();
-  const wasteDate = document.getElementById('wst-date');
-  if(wasteDate) wasteDate.value = today();
-  setTimeout(()=>show('dashboard'),350);
+  
+  if (!errEl) return;
+  if (!email || !pass) { errEl.textContent = 'Please enter email and password.'; errEl.classList.remove('hidden'); return; }
+
+  try {
+    const response = await fetch('login_handler.php', { // Verify credentials server-side
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, pass })
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      errEl.classList.add('hidden');
+      currentUser = result.user;
+
+      const fname = currentUser.fname || '';
+      const lname = currentUser.lname || '';
+      
+      const initEl = document.getElementById('topbar-initials');
+      const nameEl = document.getElementById('topbar-username');
+      
+      if (initEl) initEl.textContent = ((fname[0] || '') + (lname[0] || '')).toUpperCase();
+      if (nameEl) nameEl.textContent = `${fname} ${lname}`.trim();
+      
+      toast(`Welcome back, ${fname}! 🩷`);
+      
+      if (document.getElementById('ord-date')) document.getElementById('ord-date').value = today();
+      if (document.getElementById('rst-date')) document.getElementById('rst-date').value = today();
+      if (document.getElementById('wst-date')) document.getElementById('wst-date').value = today();
+      
+      setTimeout(() => show('dashboard'), 350);
+    } else {
+      errEl.textContent = result.error || 'Invalid credentials verified.';
+      errEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error("Authentication connectivity fault:", err);
+    errEl.textContent = 'Network connectivity error during login lifecycle.';
+    errEl.classList.remove('hidden');
+  }
 }
 
-function doSignOut() {
+async function doSignOut() {
+  try {
+    await fetch('logout_handler.php', { method: 'POST' });
+  } catch(e) { 
+    console.warn("Server session unbinding exception neglected on logout.", e); 
+  }
+  
   currentUser = null;
-  document.getElementById('l-email').value='';
-  document.getElementById('l-pass').value='';
-  document.getElementById('login-err').classList.add('hidden');
+  if (document.getElementById('l-email')) document.getElementById('l-email').value = '';
+  if (document.getElementById('l-pass')) document.getElementById('l-pass').value = '';
+  if (document.getElementById('login-err')) document.getElementById('login-err').classList.add('hidden');
+  
   show('login');
   toast('Signed out successfully.');
 }
 
-function recNext(from) {
-  if(from===1) {
-    const e = document.getElementById('rec-email').value.trim();
-    if(!e) { toast('Enter your email.',true); return; }
-    if(!ACCOUNTS.find(u=>u.email===e)) { toast('Email not found.',true); return; }
-    document.getElementById('rec-s1').classList.add('hidden');
-    document.getElementById('rec-s2').classList.remove('hidden');
-    setDot(1,'done'); setDot(2,'active');
-  } else if(from===2) {
-    if(document.getElementById('rec-code').value.trim()!=='123456') { toast('Invalid code. Use 123456.',true); return; }
-    document.getElementById('rec-s2').classList.add('hidden');
-    document.getElementById('rec-s3').classList.remove('hidden');
-    setDot(2,'done'); setDot(3,'active');
+async function recNext(from) {
+  if (from === 1) {
+    const email = document.getElementById('rec-email').value.trim();
+    if (!email) { toast('Enter your email.', true); return; }
+    
+    try {
+      const res = await fetch('recovery_handler.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'request_code', email })
+      });
+      const result = await res.json();
+      
+      if (result.success) {
+        document.getElementById('rec-s1').classList.add('hidden');
+        document.getElementById('rec-s2').classList.remove('hidden');
+        setDot(1, 'done'); setDot(2, 'active');
+        toast('Verification challenge code generated.');
+      } else {
+        toast(result.error || 'Email record not found.', true);
+      }
+    } catch(e) {
+      toast('Network communication error sending recovery challenge code.', true);
+    }
+    
+  } else if (from === 2) {
+    const enteredCode = document.getElementById('rec-code').value.trim();
+    const email = document.getElementById('rec-email').value.trim();
+    
+    try {
+      const res = await fetch('recovery_handler.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'verify_code', email, code: enteredCode })
+      });
+      const result = await res.json();
+      
+      if (result.success) {
+        document.getElementById('rec-s2').classList.add('hidden');
+        document.getElementById('rec-s3').classList.remove('hidden');
+        setDot(2, 'done'); setDot(3, 'active');
+      } else {
+        toast(result.error || 'Invalid recovery code verification failed.', true);
+      }
+    } catch(e) {
+      toast('Error parsing transaction code evaluation statements.', true);
+    }
   }
 }
 
-function recDone() {
-  const np=document.getElementById('rec-np').value,cp=document.getElementById('rec-cp').value;
-  if(!np||np.length<8) { toast('Min 8 characters.',true); return; }
-  if(np!==cp) { toast('Passwords do not match.',true); return; }
-  const email=document.getElementById('rec-email').value.trim();
-  const user=ACCOUNTS.find(u=>u.email===email);
-  if(user) user.password=np;
-  toast('Password updated! Please sign in. ✓');
-  setTimeout(()=>{ show('login'); resetRecovery(); },700);
+async function recDone() {
+  const np = document.getElementById('rec-np').value;
+  const cp = document.getElementById('rec-cp').value;
+  const email = document.getElementById('rec-email').value.trim();
+  const code = document.getElementById('rec-code').value.trim();
+  
+  if (!np || np.length < 8) { toast('Min 8 characters required.', true); return; }
+  if (np !== cp) { toast('Passwords do not match.', true); return; }
+  
+  try {
+    const res = await fetch('recovery_handler.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'reset_password', email, code, password: np })
+    });
+    const result = await res.json();
+    
+    if (result.success) {
+      toast('Password updated! Please sign in. ✓');
+      setTimeout(() => { show('login'); resetRecovery(); }, 700);
+    } else {
+      toast(result.error || 'Failed resetting account credentials.', true);
+    }
+  } catch(e) {
+    toast('Network processing error applying account changes.', true);
+  }
 }
 
 function resetRecovery() {
-  ['rec-s2','rec-s3'].forEach(id=>document.getElementById(id).classList.add('hidden'));
-  document.getElementById('rec-s1').classList.remove('hidden');
-  ['rec-email','rec-code','rec-np','rec-cp'].forEach(id=>document.getElementById(id).value='');
-  [1,2,3].forEach((n,i)=>setDot(n,i===0?'active':'todo'));
+  ['rec-s2', 'rec-s3'].forEach(id => {
+     const el = document.getElementById(id);
+     if (el) el.classList.add('hidden');
+  });
+  if (document.getElementById('rec-s1')) document.getElementById('rec-s1').classList.remove('hidden');
+  ['rec-email', 'rec-code', 'rec-np', 'rec-cp'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  [1, 2, 3].forEach((n, i) => setDot(n, i === 0 ? 'active' : 'todo'));
 }
 
-function setDot(n,state) {
-  const el=document.getElementById('dot'+n);
-  el.className='step-dot '+state;
-  el.textContent=state==='done'?'✓':n;
+function setDot(n, state) {
+  const el = document.getElementById('dot' + n);
+  if (!el) return;
+  el.className = 'step-dot ' + state;
+  el.textContent = state === 'done' ? '✓' : n;
 }
 
 function updateDashboard() {
-  document.getElementById('dash-orders').textContent = ORDERS.length;
-  document.getElementById('dash-restocks').textContent = RESTOCKS.length;
+  const ordEl = document.getElementById('dash-orders');
+  const rstEl = document.getElementById('dash-restocks');
+  
+  if (ordEl) ordEl.textContent = ORDERS.length;
+  if (rstEl) rstEl.textContent = RESTOCKS.length;
 
   const allTx = [
-    ...ORDERS.map(o=>({id:o.id,type:'Order',ref:o.menuId,details:`${MENU_NAMES[o.menuId]||o.menuId} × ${o.qty}`,date:o.date,status:o.status})),
-    ...RESTOCKS.map(r=>({id:r.id,type:'Restock',ref:r.ingId,details:`${ING_NAMES[r.ingId]||r.ingId}: ${r.qty}${r.unit}`,date:r.date,status:'Done'})),
-  ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);
+    ...ORDERS.map(o => ({
+       id: o.id, 
+       type: 'Order', 
+       ref: o.menuId, 
+       details: `${MENU_NAMES[o.menuId] || o.menuId} × ${o.qty}`, 
+       date: o.date, 
+       status: o.status
+    })),
+    ...RESTOCKS.map(r => ({
+       id: r.id, 
+       type: 'Restock', 
+       ref: r.ingId, 
+       details: `${ING_NAMES[r.ingId] || r.ingId}: ${(parseFloat(r.qty)||0).toFixed(0)} ${r.unit || 'pcs'}`, 
+       date: r.date, 
+       status: 'Done'
+    })),
+  ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
 
-  document.getElementById('dash-recent').innerHTML = allTx.map(t=>`
-    <tr>
-      <td class="td-mono">${t.id}</td>
-      <td><span class="badge ${t.type==='Order'?'badge-g':t.type==='Restock'?'badge-p':'badge-inactive'}">${t.type}</span></td>
-      <td class="td-mono">${t.ref}</td>
-      <td>${t.details}</td>
-      <td>${t.date}</td>
-      <td><span class="badge ${t.status==='Completed'||t.status==='Done'||t.status==='Logged'?'badge-done':t.status==='Pending'?'badge-pending':'badge-cancelled'}">${t.status}</span></td>
-    </tr>`).join('');
+  const recentEl = document.getElementById('dash-recent');
+  if (recentEl) {
+    recentEl.innerHTML = allTx.map(t => `
+      <tr>
+        <td class="td-mono">${t.id}</td>
+        <td><span class="badge ${t.type === 'Order' ? 'badge-g' : 'badge-p'}">${t.type}</span></td>
+        <td class="td-mono">${t.ref}</td>
+        <td>${t.details}</td>
+        <td>${t.date}</td>
+        <td><span class="badge ${t.status === 'Completed' || t.status === 'Done' ? 'badge-done' : t.status === 'Pending' ? 'badge-pending' : 'badge-cancelled'}">${t.status}</span></td>
+      </tr>`).join('');
+  }
 }
 
 function renderOrders() {
   const sf = document.getElementById('ord-f-status').value;
   const cf = document.getElementById('ord-f-cat').value;
   const filtered = ORDERS.filter(o=>(!sf||o.status===sf)&&(!cf||o.category===cf));
-  document.getElementById('ord-count').textContent = `Showing ${filtered.length} of ${ORDERS.length} orders`;
-  document.getElementById('ord-body').innerHTML = filtered.map(o=>`
-    <tr>
-      <td class="td-mono">${o.id}</td>
-      <td class="td-mono">${o.menuId} <small style="color:var(--muted)">${MENU_NAMES[o.menuId]||''}</small></td>
-      <td><span class="badge ${catBadge(o.category)}">${catLabel(o.category)}</span></td>
-      <td>${o.qty}</td>
-      <td>${o.customer}</td>
-      <td>${o.date}</td>
-      <td><span class="badge ${o.status==='Completed'?'badge-done':o.status==='Pending'?'badge-pending':'badge-cancelled'}">${o.status}</span></td>
-      <td><div class="td-actions">
-        <button class="btn btn-xs btn-ghost" onclick="openOrdModal('${o.id}')">Status</button>
-        <button class="btn btn-xs btn-danger" onclick="deleteOrder('${o.id}')">Delete</button>
-      </div></td>
-    </tr>`).join('');
+  
+  const countEl = document.getElementById('ord-count');
+  const bodyEl = document.getElementById('ord-body');
+  
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${ORDERS.length} orders`;
+  if (bodyEl) {
+    bodyEl.innerHTML = filtered.map(o=>`
+      <tr>
+        <td class="td-mono">${o.id}</td>
+        <td class="td-mono">${o.menuId} <small style="color:var(--muted)">${MENU_NAMES[o.menuId]||''}</small></td>
+        <td><span class="badge ${catBadge(o.category)}">${catLabel(o.category)}</span></td>
+        <td>${parseInt(o.qty) || 0}</td>
+        <td>${o.customer || 'Walk-In'}</td>
+        <td>${o.date}</td>
+        <td><span class="badge ${o.status==='Completed'?'badge-done':o.status==='Pending'?'badge-pending':'badge-cancelled'}">${o.status}</span></td>
+        <td><div class="td-actions">
+          <button class="btn btn-xs btn-ghost" onclick="openOrdModal('${o.id}')">Status</button>
+          <button class="btn btn-xs btn-danger" onclick="deleteOrder('${o.id}')">Delete</button>
+        </div></td>
+      </tr>`).join('');
+  }
 }
 
-function addOrder() {
+async function addOrder() {
   const menuId = document.getElementById('ord-menu').value;
   const qty = parseInt(document.getElementById('ord-qty').value)||0;
   const customer = document.getElementById('ord-customer').value.trim();
   const date = document.getElementById('ord-date').value.trim()||today();
   const notes = document.getElementById('ord-notes').value.trim();
+  
   const errEl = document.getElementById('ord-err');
+  const sucEl = document.getElementById('ord-suc');
+  
   errEl.classList.add('hidden');
-  document.getElementById('ord-suc').classList.add('hidden');
+  sucEl.classList.add('hidden');
+  
   if(!menuId||!customer) { errEl.textContent='Menu and customer name are required.'; errEl.classList.remove('hidden'); return; }
   if(qty<1) { errEl.textContent='Quantity must be at least 1.'; errEl.classList.remove('hidden'); return; }
-  const id = 'ORD'+pad(nextOrdId++);
-  ORDERS.push({id,menuId,category:getCat(menuId),qty,customer,date,notes,status:'Pending'});
-  const suc = document.getElementById('ord-suc');
-  suc.textContent = `Order ${id} for ${customer} saved!`;
-  suc.classList.remove('hidden');
-  toast(`Order ${id} created ✓`);
-  clearOrdForm();
-  setTimeout(()=>suc.classList.add('hidden'),3000);
+
+  try {
+    const response = await fetch('add_order.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ menuId, qty, customer, date, notes })
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      ORDERS.unshift({
+        id: result.id || ('ORD' + result.db_id), 
+        menuId,
+        category: getCat(menuId),
+        qty,
+        customer,
+        date,
+        notes,
+        status: 'Pending'
+      });
+      
+      sucEl.textContent = `Order ${result.id || ''} for ${customer} saved securely!`;
+      sucEl.classList.remove('hidden');
+      toast(`Order ${result.id || ''} created ✓`);
+      clearOrdForm();
+      renderOrders();
+      if (typeof updateDashboard === "function") updateDashboard();
+      if (typeof renderOrdersReport === "function") renderOrdersReport();
+      setTimeout(()=>sucEl.classList.add('hidden'), 3000);
+    } else {
+      errEl.textContent = `Database write error: ${result.error || 'Failed to save order transaction.'}`;
+      errEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error("Network issue running order transaction save:", err);
+    errEl.textContent = 'Network pipeline error connectivity failed.';
+    errEl.classList.remove('hidden');
+  }
 }
 
 function clearOrdForm() {
-  document.getElementById('ord-menu').value='';
-  document.getElementById('ord-qty').value='1';
-  document.getElementById('ord-customer').value='';
-  document.getElementById('ord-date').value=today();
-  document.getElementById('ord-notes').value='';
+  if(document.getElementById('ord-menu')) document.getElementById('ord-menu').value = '';
+  if(document.getElementById('ord-qty')) document.getElementById('ord-qty').value = '1';
+  if(document.getElementById('ord-customer')) document.getElementById('ord-customer').value = '';
+  if(document.getElementById('ord-date')) document.getElementById('ord-date').value = today();
+  if(document.getElementById('ord-notes')) document.getElementById('ord-notes').value = '';
 }
 
 function openOrdModal(id) {
-  const o = ORDERS.find(x=>x.id===id);
-  if(!o) return;
+  const o = ORDERS.find(x => String(x.id) === String(id));
+  if (!o) return;
   document.getElementById('om-id').value = id;
   document.getElementById('om-status').value = o.status;
   document.getElementById('ord-modal').classList.remove('hidden');
 }
 
-function saveOrderStatus() {
+async function saveOrderStatus() {
   const id = document.getElementById('om-id').value;
-  const o = ORDERS.find(x=>x.id===id);
-  if(o) { o.status=document.getElementById('om-status').value; toast(`Order ${id} updated ✓`); }
-  closeModal('ord-modal');
-  renderOrders();
+  const newStatus = document.getElementById('om-status').value;
+  const o = ORDERS.find(x => String(x.id) === String(id));
+  
+  try {
+    const response = await fetch('add_order.php', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_status', id: id, status: newStatus })
+    });
+    const result = await response.json();
+
+    if (result.success || result.status === 'success') {
+      if (o) o.status = newStatus; 
+      toast(`Order ${id} updated to ${newStatus} ✓`);
+      closeModal('ord-modal');
+      renderOrders();
+      if (typeof renderOrdersReport === "function") renderOrdersReport();
+      if (typeof updateDashboard === "function") updateDashboard();
+    } else {
+      toast(`Failed to save state change: ${result.error || 'Server error.'}`, true);
+    }
+  } catch (err) {
+    console.error("Failed transmitting transaction status updates:", err);
+    toast("Network tracking fault. System status mismatch.", true);
+  }
 }
 
-function deleteOrder(id) {
-  const idx = ORDERS.findIndex(x=>x.id===id);
-  if(idx>=0) { ORDERS.splice(idx,1); toast(`Order ${id} deleted.`); renderOrders(); }
+async function deleteOrder(id) {
+  if (!confirm(`Are you sure you want to delete order ${id}?`)) return;
+  
+  try {
+    const res = await fetch(`delete_order.php?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const result = await res.json();
+    
+    if (result.success) {
+      const idx = ORDERS.findIndex(x => String(x.id) === String(id));
+      if (idx >= 0) { 
+        ORDERS.splice(idx, 1); 
+        toast(`Order ${id} deleted permanent.`); 
+        renderOrders(); 
+        if (typeof renderOrdersReport === "function") renderOrdersReport();
+        if (typeof updateDashboard === "function") updateDashboard();
+      }
+    } else {
+      toast(`Failed to delete order: ${result.error}`, true);
+    }
+  } catch (err) {
+    console.error("Error deleting order:", err);
+  }
 }
 
 function renderRestocks() {
-  const ingF = document.getElementById('rst-f-ing').value;
-  const filtered = RESTOCKS.filter(r=>(!ingF||r.ingId===ingF));
-  document.getElementById('rst-count').textContent = `Showing ${filtered.length} of ${RESTOCKS.length} records`;
-  document.getElementById('rst-body').innerHTML = filtered.map(r=>`
-    <tr>
-      <td class="td-mono">${r.id}</td>
-      <td class="td-mono">${r.ingId} <small style="color:var(--muted)">${ING_NAMES[r.ingId]||''}</small></td>
-      <td>${r.qty.toFixed(2)}</td>
-      <td>${r.unit}</td>
-      <td>${r.supplier}</td>
-      <td>${r.receivedBy}</td>
-      <td>${r.date}</td>
-    </tr>`).join('');
+  const rstFIng = document.getElementById('rst-f-ing');
+  const ingF = rstFIng ? rstFIng.value : '';
+  const filtered = RESTOCKS.filter(r => (!ingF || r.ingId === ingF));
+  
+  const countEl = document.getElementById('rst-count');
+  const bodyEl = document.getElementById('rst-body');
+  
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${RESTOCKS.length} records`;
+  if (bodyEl) {
+    bodyEl.innerHTML = filtered.map(r => {
+      const numericQty = parseFloat(r.qty) || 0;
+      return `
+      <tr>
+        <td class="td-mono">${r.id}</td>
+        <td class="td-mono">${r.ingId} <small style="color:var(--muted)">${ING_NAMES[r.ingId] || ''}</small></td>
+        <td>${numericQty.toFixed(0)}</td>
+        <td>${r.unit || 'pcs'}</td>
+        <td>${r.supplier || '—'}</td>
+        <td>${r.receivedBy || 'Admin'}</td>
+        <td>${r.date}</td>
+      </tr>`;
+    }).join('');
+  }
 }
 
-function addRestock() {
+async function addRestock() {
   const ingId = document.getElementById('rst-ing').value;
-  const qty = parseFloat(document.getElementById('rst-qty').value)||0;
+  const qty = parseFloat(document.getElementById('rst-qty').value) || 0;
   const unit = document.getElementById('rst-unit').value;
   const supplier = document.getElementById('rst-supplier').value.trim();
-  const date = document.getElementById('rst-date').value.trim()||today();
+  const date = document.getElementById('rst-date').value.trim() || today();
+  
   const errEl = document.getElementById('rst-err');
-  errEl.classList.add('hidden');
-  document.getElementById('rst-suc').classList.add('hidden');
-  if(!ingId||!supplier) { errEl.textContent='Ingredient and supplier are required.'; errEl.classList.remove('hidden'); return; }
-  if(qty<=0) { errEl.textContent='Quantity must be greater than 0.'; errEl.classList.remove('hidden'); return; }
-  const id = 'RST'+pad(nextRstId++);
-  RESTOCKS.push({id,ingId,qty,unit,supplier,receivedBy:currentUser?currentUser.fname+' '+currentUser.lname:'Unknown',date});
-  const suc = document.getElementById('rst-suc');
-  suc.textContent = `Restock ${id} recorded!`;
-  suc.classList.remove('hidden');
-  toast(`Restock ${id} saved ✓`);
-  clearRstForm();
-  setTimeout(()=>suc.classList.add('hidden'),3000);
+  const sucEl = document.getElementById('rst-suc');
+  
+  if(errEl) errEl.classList.add('hidden');
+  if(sucEl) sucEl.classList.add('hidden');
+  
+  if (!ingId || !supplier) { if(errEl){errEl.textContent = 'Ingredient and supplier are required.'; errEl.classList.remove('hidden');} return; }
+  if (qty <= 0) { if(errEl){errEl.textContent = 'Quantity must be greater than 0.'; errEl.classList.remove('hidden');} return; }
+
+  try {
+    const response = await fetch('add_restock.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ingId, qty, unit, supplier, date })
+    });
+    
+    const result = await response.json();
+
+    if (result.success) {
+      RESTOCKS.unshift({
+        id: result.id,
+        ingId,
+        qty,
+        unit,
+        supplier,
+        receivedBy: currentUser ? currentUser.fname + ' ' + currentUser.lname : 'Admin',
+        date
+      });
+
+      if(sucEl) {
+         sucEl.textContent = `Restock ${result.id} recorded!`;
+         sucEl.classList.remove('hidden');
+      }
+      toast(`Restock ${result.id} saved ✓`);
+      clearRstForm();
+      
+      renderRestocks();
+      if (typeof renderRestocksReport === "function") renderRestocksReport();
+      if (typeof updateDashboard === "function") updateDashboard();
+      setTimeout(() => { if(sucEl) sucEl.classList.add('hidden'); }, 3000);
+    } else {
+      if(errEl) {
+        errEl.textContent = `Database Error: ${result.error}`;
+        errEl.classList.remove('hidden');
+      }
+    }
+  } catch (err) {
+    console.error("Error saving restock:", err);
+  }
 }
 
 function clearRstForm() {
-  document.getElementById('rst-ing').value='';
-  document.getElementById('rst-qty').value='';
-  document.getElementById('rst-unit').value='pcs';
-  document.getElementById('rst-supplier').value='';
-  document.getElementById('rst-date').value=today();
+  if(document.getElementById('rst-ing')) document.getElementById('rst-ing').value = '';
+  if(document.getElementById('rst-qty')) document.getElementById('rst-qty').value = '';
+  if(document.getElementById('rst-unit')) document.getElementById('rst-unit').value = 'pcs';
+  if(document.getElementById('rst-supplier')) document.getElementById('rst-supplier').value = '';
+  if(document.getElementById('rst-date')) document.getElementById('rst-date').value = today();
 }
 
-(function initIngFilter(){
-  const ings=[...new Set(MENU_DATA.map(r=>r[2]))].sort();
-  const sel=document.getElementById('f-ing');
-  ings.forEach(i=>{ const o=document.createElement('option'); o.value=i; o.textContent=i; sel.appendChild(o); });
+function initIngFilter() {
+  if (!MENU_DATA || MENU_DATA.length === 0) return;
+  const ings = [...new Set(MENU_DATA.map(r => r[2]))].sort();
+  
+  const sel = document.getElementById('f-ing');
+  if (sel) {
+    sel.innerHTML = '<option value="">All Ingredients</option>';
+    ings.forEach(i => { const o = document.createElement('option'); o.value = i; o.textContent = ING_NAMES[i] || i; sel.appendChild(o); });
+  }
 
-  const rstSel=document.getElementById('rst-f-ing');
-  ings.forEach(i=>{ const o=document.createElement('option'); o.value=i; o.textContent=i; rstSel.appendChild(o); });
-})();
+  const rstSel = document.getElementById('rst-f-ing');
+  if (rstSel) {
+    rstSel.innerHTML = '<option value="">All Ingredients</option>';
+    ings.forEach(i => { const o = document.createElement('option'); o.value = i; o.textContent = ING_NAMES[i] || i; rstSel.appendChild(o); });
+  }
+}
 
 function filterReport() {
-  const cat=document.getElementById('f-cat').value;
-  const ing=document.getElementById('f-ing').value;
-  const minQty=parseFloat(document.getElementById('f-qty').value)||0;
-  const filtered=MENU_DATA.filter(r=>{ const c=getCat(r[1]); return(!cat||c===cat)&&(!ing||r[2]===ing)&&r[3]>=minQty; });
-  document.getElementById('rpt-count').textContent=`Showing ${filtered.length} of ${MENU_DATA.length} records`;
-  document.getElementById('rpt-body').innerHTML=filtered.map(r=>{ const c=getCat(r[1]); return `<tr><td class="td-mono">${r[0]}</td><td class="td-mono">${r[1]}</td><td class="td-mono">${r[2]}</td><td>${r[3].toFixed(2)}</td><td><span class="badge ${catBadge(c)}">${catLabel(c)}</span></td></tr>`; }).join('');
+  const cat = document.getElementById('f-cat').value;
+  const ing = document.getElementById('f-ing').value;
+  const minQty = parseFloat(document.getElementById('f-qty').value) || 0;
+  
+  const filtered = MENU_DATA.filter(r => { 
+    const c = getCat(r[1]); 
+    return (!cat || c === cat) && (!ing || r[2] === ing) && (parseFloat(r[3]) || 0) >= minQty; 
+  });
+  
+  const countEl = document.getElementById('rpt-count');
+  const bodyEl = document.getElementById('rpt-body');
+  
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${MENU_DATA.length} records`;
+  if (bodyEl) {
+    bodyEl.innerHTML = filtered.map(r => { 
+      const c = getCat(r[1]); 
+      return `<tr><td class="td-mono">${r[0]}</td><td class="td-mono">${r[1]}</td><td class="td-mono">${r[2]}</td><td>${(parseFloat(r[3]) || 0).toFixed(2)}</td><td><span class="badge ${catBadge(c)}">${catLabel(c)}</span></td></tr>`; 
+    }).join('');
+  }
 }
 
 function renderOrdersReport() {
   const count = document.getElementById('rpt-orders-count');
   const body = document.getElementById('rpt-orders-body');
-  if(!count || !body) return;
+  if (!count || !body) return;
   count.textContent = `Showing ${ORDERS.length} order records`;
-  body.innerHTML = ORDERS.map(o=>`
+  body.innerHTML = ORDERS.map(o => `
     <tr>
       <td class="td-mono">${o.id}</td>
       <td class="td-mono">${o.menuId}</td>
-      <td>${MENU_NAMES[o.menuId]||o.menuId}</td>
+      <td>${MENU_NAMES[o.menuId] || o.menuId}</td>
       <td><span class="badge ${catBadge(o.category)}">${catLabel(o.category)}</span></td>
-      <td>${o.qty}</td>
-      <td>${o.customer}</td>
+      <td>${parseInt(o.qty) || 0}</td>
+      <td>${o.customer || 'Walk-In'}</td>
       <td>${o.date}</td>
-      <td><span class="badge ${o.status==='Completed'?'badge-done':o.status==='Pending'?'badge-pending':'badge-cancelled'}">${o.status}</span></td>
+      <td><span class="badge ${o.status === 'Completed' ? 'badge-done' : o.status === 'Pending' ? 'badge-pending' : 'badge-cancelled'}">${o.status}</span></td>
     </tr>`).join('');
 }
 
 function renderRestocksReport() {
   const count = document.getElementById('rpt-restocks-count');
   const body = document.getElementById('rpt-restocks-body');
-  if(!count || !body) return;
+  if (!count || !body) return;
   count.textContent = `Showing ${RESTOCKS.length} restock records`;
-  body.innerHTML = RESTOCKS.map(r=>`
+  body.innerHTML = RESTOCKS.map(r => {
+    const numericQty = parseFloat(r.qty) || 0;
+    return `
     <tr>
       <td class="td-mono">${r.id}</td>
       <td class="td-mono">${r.ingId}</td>
-      <td>${ING_NAMES[r.ingId]||r.ingId}</td>
-      <td>${r.qty.toFixed(2)}</td>
-      <td>${r.unit}</td>
-      <td>${r.supplier}</td>
-      <td>${r.receivedBy}</td>
+      <td>${ING_NAMES[r.ingId] || r.ingId}</td>
+      <td>${numericQty.toFixed(0)}</td>
+      <td>${r.unit || 'pcs'}</td>
+      <td>${r.supplier || '—'}</td>
+      <td>${r.receivedBy || 'Admin'}</td>
       <td>${r.date}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
-
+  
 function resetFilters() {
-  document.getElementById('f-cat').value='';
-  document.getElementById('f-ing').value='';
-  document.getElementById('f-qty').value='';
+  if (document.getElementById('f-cat')) document.getElementById('f-cat').value = '';
+  if (document.getElementById('f-ing')) document.getElementById('f-ing').value = '';
+  if (document.getElementById('f-qty')) document.getElementById('f-qty').value = '';
   filterReport();
 }
 
 function renderUserTable() {
-  const search=(document.getElementById('u-search')?.value||'').toLowerCase();
-  const role=document.getElementById('u-role')?.value||'';
-  const status=document.getElementById('u-status')?.value||'';
-  const filtered=ACCOUNTS.filter(u=>{ const full=(u.fname+' '+u.lname+' '+u.email).toLowerCase(); return(!search||full.includes(search))&&(!role||u.role===role)&&(!status||u.status===status); });
-  document.getElementById('u-count').textContent=`Showing ${filtered.length} of ${ACCOUNTS.length} accounts`;
-  document.getElementById('user-table-body').innerHTML=filtered.map(u=>`
-    <tr>
-      <td class="td-mono">U${pad(u.id)}</td>
-      <td>${u.fname} ${u.lname}</td>
-      <td>${u.email}</td>
-      <td><span class="badge ${u.role==='Admin'?'badge-admin':'badge-staff'}">${u.role}</span></td>
-      <td><span class="badge ${u.status==='Active'?'badge-active':'badge-inactive'}">${u.status}</span></td>
-      <td><div class="td-actions">
-        <button class="btn btn-xs btn-ghost" onclick="openEditModal(${u.id})">Edit</button>
-        ${u.status==='Active'
-          ?`<button class="btn btn-xs btn-danger" onclick="confirmToggleStatus(${u.id},'Inactive')">Deactivate</button>`
-          :`<button class="btn btn-xs btn-primary" onclick="confirmToggleStatus(${u.id},'Active')">Activate</button>`}
-      </div></td>
-    </tr>`).join('');
+  const search = (document.getElementById('u-search')?.value || '').toLowerCase();
+  const role = document.getElementById('u-role')?.value || '';
+  const status = document.getElementById('u-status')?.value || '';
+  
+  const filtered = ACCOUNTS.filter(u => { 
+    const full = ((u.fname || '') + ' ' + (u.lname || '') + ' ' + (u.email || '')).toLowerCase(); 
+    return (!search || full.includes(search)) && (!role || u.role === role) && (!status || u.status === status); 
+  });
+  
+  const countEl = document.getElementById('u-count');
+  const bodyEl = document.getElementById('user-table-body');
+  
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${ACCOUNTS.length} accounts`;
+  if (bodyEl) {
+    bodyEl.innerHTML = filtered.map(u => `
+      <tr>
+        <td class="td-mono">U${pad(u.id)}</td>
+        <td>${u.fname || ''} ${u.lname || ''}</td>
+        <td>${u.email || ''}</td>
+        <td><span class="badge ${u.role === 'Admin' ? 'badge-admin' : 'badge-staff'}">${u.role || 'Staff'}</span></td>
+        <td><span class="badge ${u.status === 'Active' ? 'badge-active' : 'badge-inactive'}">${u.status || 'Inactive'}</span></td>
+        <td><div class="td-actions">
+          <button class="btn btn-xs btn-ghost" onclick="openEditModal(${u.id})">Edit</button>
+          ${u.status === 'Active'
+            ? `<button class="btn btn-xs btn-danger" onclick="confirmToggleStatus(${u.id},'Inactive')">Deactivate</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="confirmToggleStatus(${u.id},'Active')">Activate</button>`}
+        </div></td>
+      </tr>`).join('');
+  }
 }
 
-function addUser() {
-  const fname=document.getElementById('a-fname').value.trim(),lname=document.getElementById('a-lname').value.trim();
-  const email=document.getElementById('a-email').value.trim(),role=document.getElementById('a-role').value;
-  const status=document.getElementById('a-status').value,pass=document.getElementById('a-pass').value;
-  const cpass=document.getElementById('a-cpass').value;
-  const errEl=document.getElementById('add-err'),sucEl=document.getElementById('add-success');
-  errEl.classList.add('hidden'); sucEl.classList.add('hidden');
-  if(!fname||!lname||!email||!pass) { errEl.textContent='All fields required.'; errEl.classList.remove('hidden'); return; }
-  if(pass.length<8) { errEl.textContent='Password min 8 chars.'; errEl.classList.remove('hidden'); return; }
-  if(pass!==cpass) { errEl.textContent='Passwords do not match.'; errEl.classList.remove('hidden'); return; }
-  if(ACCOUNTS.find(u=>u.email===email)) { errEl.textContent='Email already exists.'; errEl.classList.remove('hidden'); return; }
-  ACCOUNTS.push({id:nextUserId++,fname,lname,email,password:pass,role,status,created:today()});
-  sucEl.textContent=`Account for ${fname} ${lname} created!`;
-  sucEl.classList.remove('hidden');
-  toast(`Account created for ${fname} ✓`);
-  clearAddForm();
-  setTimeout(()=>sucEl.classList.add('hidden'),4000);
+async function addUser() {
+  const fname = document.getElementById('a-fname').value.trim();
+  const lname = document.getElementById('a-lname').value.trim();
+  const email = document.getElementById('a-email').value.trim();
+  const role = document.getElementById('a-role').value;
+  const status = document.getElementById('a-status').value;
+  const pass = document.getElementById('a-pass').value;
+  const cpass = document.getElementById('a-cpass').value;
+  
+  const errEl = document.getElementById('add-err');
+  const sucEl = document.getElementById('add-success');
+  
+  errEl.classList.add('hidden'); 
+  sucEl.classList.add('hidden');
+  
+  if (!fname || !lname || !email || !pass) { errEl.textContent = 'All fields required.'; errEl.classList.remove('hidden'); return; }
+  if (pass.length < 8) { errEl.textContent = 'Password min 8 chars.'; errEl.classList.remove('hidden'); return; }
+  if (pass !== cpass) { errEl.textContent = 'Passwords do not match.'; errEl.classList.remove('hidden'); return; }
+  if (ACCOUNTS.find(u => u.email.toLowerCase() === email.toLowerCase())) { errEl.textContent = 'Email already exists.'; errEl.classList.remove('hidden'); return; }
+
+  try {
+    const response = await fetch('save_user.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'create', fname, lname, email, role, status, pass })
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      ACCOUNTS.push({ id: result.id, fname, lname, email, role, status });
+      sucEl.textContent = `Account for ${fname} ${lname} created!`;
+      sucEl.classList.remove('hidden');
+      toast(`Account created for ${fname} ✓`);
+      clearAddForm();
+      renderUserTable();
+      setTimeout(() => sucEl.classList.add('hidden'), 4000);
+    } else {
+      errEl.textContent = result.error || 'Failed to save account.';
+      errEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error("Network problem creating user profile:", err);
+    errEl.textContent = 'Network connectivity issue saving user.';
+    errEl.classList.remove('hidden');
+  }
 }
 
 function clearAddForm() {
-  ['a-fname','a-lname','a-email','a-pass','a-cpass'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('a-role').value='Staff';
-  document.getElementById('a-status').value='Active';
-  document.getElementById('add-err').classList.add('hidden');
+  ['a-fname', 'a-lname', 'a-email', 'a-pass', 'a-cpass'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const roleEl = document.getElementById('a-role');
+  const statEl = document.getElementById('a-status');
+  const errEl = document.getElementById('add-err');
+  
+  if (roleEl) roleEl.value = 'Staff';
+  if (statEl) statEl.value = 'Active';
+  if (errEl) errEl.classList.add('hidden');
 }
 
 function openEditModal(uid) {
-  const u=ACCOUNTS.find(u=>u.id===uid); if(!u) return;
-  document.getElementById('edit-uid').value=uid;
-  document.getElementById('edit-fname').value=u.fname;
-  document.getElementById('edit-lname').value=u.lname;
-  document.getElementById('edit-email').value=u.email;
-  document.getElementById('edit-role').value=u.role;
-  document.getElementById('edit-pass').value='';
+  const u = ACCOUNTS.find(x => x.id === uid); 
+  if (!u) return;
+  document.getElementById('edit-uid').value = uid;
+  document.getElementById('edit-fname').value = u.fname;
+  document.getElementById('edit-lname').value = u.lname;
+  document.getElementById('edit-email').value = u.email;
+  document.getElementById('edit-role').value = u.role;
+  document.getElementById('edit-pass').value = '';
   document.getElementById('edit-err').classList.add('hidden');
   document.getElementById('edit-modal').classList.remove('hidden');
 }
 
-function saveEdit() {
-  const uid=parseInt(document.getElementById('edit-uid').value);
-  const fname=document.getElementById('edit-fname').value.trim(),lname=document.getElementById('edit-lname').value.trim();
-  const email=document.getElementById('edit-email').value.trim(),role=document.getElementById('edit-role').value;
-  const pass=document.getElementById('edit-pass').value;
-  const errEl=document.getElementById('edit-err'); errEl.classList.add('hidden');
-  if(!fname||!lname||!email) { errEl.textContent='Name and email required.'; errEl.classList.remove('hidden'); return; }
-  if(ACCOUNTS.find(u=>u.email===email&&u.id!==uid)) { errEl.textContent='Email used by another account.'; errEl.classList.remove('hidden'); return; }
-  if(pass&&pass.length<8) { errEl.textContent='Password min 8 chars.'; errEl.classList.remove('hidden'); return; }
-  const u=ACCOUNTS.find(u=>u.id===uid); if(!u) return;
-  u.fname=fname; u.lname=lname; u.email=email; u.role=role;
-  if(pass) u.password=pass;
-  if(currentUser&&currentUser.id===uid) {
-    currentUser.fname=fname; currentUser.lname=lname;
-    document.getElementById('topbar-initials').textContent=fname[0]+lname[0];
-    document.getElementById('topbar-username').textContent=fname+' '+lname;
+async function saveEdit() {
+  const uid = parseInt(document.getElementById('edit-uid').value);
+  const fname = document.getElementById('edit-fname').value.trim();
+  const lname = document.getElementById('edit-lname').value.trim();
+  const email = document.getElementById('edit-email').value.trim();
+  const role = document.getElementById('edit-role').value;
+  const pass = document.getElementById('edit-pass').value;
+  
+  const errEl = document.getElementById('edit-err'); 
+  errEl.classList.add('hidden');
+  
+  if (!fname || !lname || !email) { errEl.textContent = 'Name and email required.'; errEl.classList.remove('hidden'); return; }
+  if (ACCOUNTS.find(u => u.email.toLowerCase() === email.toLowerCase() && u.id !== uid)) { errEl.textContent = 'Email used by another account.'; errEl.classList.remove('hidden'); return; }
+  if (pass && pass.length < 8) { errEl.textContent = 'Password min 8 chars.'; errEl.classList.remove('hidden'); return; }
+
+  try {
+    const response = await fetch('save_user.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update', id: uid, fname, lname, email, role, pass })
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      const u = ACCOUNTS.find(x => x.id === uid); 
+      if (u) {
+        u.fname = fname; u.lname = lname; u.email = email; u.role = role;
+        if (pass) u.password = pass;
+      }
+      
+      if (currentUser && currentUser.id === uid) {
+        currentUser.fname = fname; 
+        currentUser.lname = lname;
+        currentUser.role = role;
+        
+        const initEl = document.getElementById('topbar-initials');
+        const nameEl = document.getElementById('topbar-username');
+        
+        if (initEl) initEl.textContent = ((fname[0] || '') + (lname[0] || '')).toUpperCase();
+        if (nameEl) nameEl.textContent = `${fname} ${lname}`;
+      }
+      
+      closeModal('edit-modal'); 
+      renderUserTable(); 
+      toast(`Profile updated: ${fname} ${lname} ✓`);
+    } else {
+      errEl.textContent = result.error || 'Failed to update credentials.';
+      errEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error("Network problem logging profile updates:", err);
+    errEl.textContent = 'Network connectivity error updating account.';
+    errEl.classList.remove('hidden');
   }
-  closeModal('edit-modal'); renderUserTable(); toast(`Profile updated: ${fname} ${lname} ✓`);
 }
 
 function confirmToggleStatus(uid, newStatus) {
-  const u=ACCOUNTS.find(u=>u.id===uid); if(!u) return;
-  const isD=newStatus==='Inactive';
-  document.getElementById('confirm-title').textContent=isD?'Deactivate Account':'Activate Account';
-  document.getElementById('confirm-msg').textContent=`${isD?'Deactivate':'Activate'} ${u.fname} ${u.lname}'s account?`;
-  const ok=document.getElementById('confirm-ok');
-  ok.className=`btn btn-sm ${isD?'btn-danger':'btn-primary'}`;
-  ok.textContent=isD?'Deactivate':'Activate';
-  ok.onclick=()=>toggleStatus(uid,newStatus);
+  const u = ACCOUNTS.find(x => x.id === uid); 
+  if (!u) return;
+  const isD = newStatus === 'Inactive';
+  document.getElementById('confirm-title').textContent = isD ? 'Deactivate Account' : 'Activate Account';
+  document.getElementById('confirm-msg').textContent = `${isD ? 'Deactivate' : 'Activate'} ${u.fname || ''} ${u.lname || ''}'s account?`;
+  
+  const ok = document.getElementById('confirm-ok');
+  ok.className = `btn btn-sm ${isD ? 'btn-danger' : 'btn-primary'}`;
+  ok.textContent = isD ? 'Deactivate' : 'Activate';
+  ok.onclick = () => toggleStatus(uid, newStatus);
   document.getElementById('confirm-modal').classList.remove('hidden');
 }
 
-function toggleStatus(uid, ns) {
-  const u=ACCOUNTS.find(u=>u.id===uid);
-  if(u) { u.status=ns; toast(`Account ${ns==='Active'?'activated':'deactivated'}: ${u.fname} ${u.lname}`); }
-  closeModal('confirm-modal'); renderUserTable();
+async function toggleStatus(uid, ns) {
+  try {
+    const response = await fetch('save_user.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'toggle', id: uid, status: ns })
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      const u = ACCOUNTS.find(x => x.id === uid);
+      if (u) { 
+        u.status = ns; 
+        toast(`Account ${ns === 'Active' ? 'activated' : 'deactivated'}: ${u.fname} ${u.lname}`); 
+      }
+      if (currentUser && currentUser.id === uid) {
+        currentUser.status = ns;
+      }
+      closeModal('confirm-modal'); 
+      renderUserTable();
+    } else {
+      toast(`Failed to switch system access: ${result.error}`, true);
+    }
+  } catch (err) {
+    console.error("Network problem running status switch:", err);
+    toast("Network exception altering profile accessibility flag.", true);
+  }
 }
 
 const COMPANY = 'Cattleya Eats';
@@ -2039,16 +2462,32 @@ function applyHeaderStyle(ws, range) {
 
 function buildHeaderRows(reportTitle) {
   return [
+    [], 
+    [], 
+    [], 
+    [], 
     [],
-    [],
-    [],
-    [],
-    [],
-    [COMPANY],
-    [ADDRESS],
-    [reportTitle],
-    [`Generated: ${new Date().toLocaleString('en-PH')} | Generated by: ${currentUser ? currentUser.fname+' '+currentUser.lname : 'System'}`],
-    []
+    [typeof COMPANY !== 'undefined' ? COMPANY : 'Cattleya Eats'], 
+    [typeof ADDRESS !== 'undefined' ? ADDRESS : 'Philippines'],   
+    [reportTitle.toUpperCase()],                                 
+    [`Generated: ${new Date().toLocaleString('en-PH')} | Operator: ${currentUser ? currentUser.fname + ' ' + currentUser.lname : 'System'}`], 
+    []  
+  ];
+}
+
+function applyReportHeaderLayout(ws, lastCol) {
+  ws['!merges'] = Array.from({ length: 9 }, (_, r) => ({
+    s: { r: r, c: 0 },
+    e: { r: r, c: lastCol }
+  }));
+
+  ws['!rows'] = [
+    { hpt: 24 }, { hpt: 24 }, { hpt: 24 }, { hpt: 24 }, { hpt: 10 },
+    { hpt: 18 }, 
+    { hpt: 16 }, 
+    { hpt: 22 }, 
+    { hpt: 16 }, 
+    { hpt: 12 }  
   ];
 }
 
@@ -2093,7 +2532,7 @@ function graphBar(value, maxValue) {
   return '█'.repeat(width);
 }
 
-
+// Security sanitization gate for rendering inside Excel's drawing structure
 function xmlEscape(value) {
   return String(value).replace(/[<>&"']/g, ch=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[ch]));
 }
@@ -2157,11 +2596,7 @@ function nextRelId(relsXml) {
 }
 
 function graphSvg(section) {
-  const width = 760;
-  const height = 340;
-  const left = 135;
-  const top = 54;
-  const chartWidth = 540;
+  const width = 760; height = 340; left = 135; top = 54; chartWidth = 540;
   const rowHeight = Math.max(18, Math.min(34, 220 / Math.max(section.rows.length, 1)));
   const chartHeight = rowHeight * section.rows.length;
   const values = section.rows.map(row=>Number(row[1]) || 0);
@@ -2169,10 +2604,12 @@ function graphSvg(section) {
   const axisMax = Math.ceil(maxValue / 5) * 5 || 5;
   const colors = ['#b4c981','#f4b8c6','#5d7b3d','#e9ccd3','#d1efbd','#f29bb9','#eaf5e5','#e4568b'];
   const ticks = Array.from({length:6}, (_, i)=>Math.round((axisMax / 5) * i));
+  
   const grid = ticks.map(t=>{
     const x = left + (t / axisMax) * chartWidth;
     return `<line x1="${x}" y1="${top - 8}" x2="${x}" y2="${top + chartHeight + 16}" stroke="#d9d9d9" stroke-width="1"/><text x="${x}" y="${top + chartHeight + 38}" text-anchor="middle" font-size="12" fill="#666">${t}</text>`;
   }).join('');
+  
   const bars = section.rows.map(([label, value], i)=>{
     const numericValue = Number(value) || 0;
     const y = top + i * rowHeight + 6;
@@ -2180,11 +2617,11 @@ function graphSvg(section) {
     const color = colors[i % colors.length];
     return `<text x="${left - 14}" y="${y + 16}" text-anchor="end" font-size="12" fill="#555">${xmlEscape(label)}</text><rect x="${left}" y="${y}" width="${barWidth}" height="18" fill="${color}"/><text x="${left + barWidth + 8}" y="${y + 15}" font-size="12" fill="#333">${numericValue}</text>`;
   }).join('');
+  
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <rect width="100%" height="100%" fill="#ffffff"/>
     <text x="${width / 2}" y="28" text-anchor="middle" font-size="20" font-family="Arial, sans-serif" fill="#6b6b6b">${xmlEscape(section.title)}</text>
-    ${grid}
-    ${bars}
+    ${grid} ${bars}
   </svg>`;
 }
 
@@ -2195,29 +2632,21 @@ function svgToPngBase64(svg) {
     const url = URL.createObjectURL(svgBlob);
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      canvas.width = 760;
-      canvas.height = 340;
+      canvas.width = 760; canvas.height = 340;
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
-      URL.revokeObjectURL(url);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url);
       resolve(canvas.toDataURL('image/png').split(',')[1]);
     };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Could not render graph image.'));
-    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not render graph image.')); };
     img.src = url;
   });
 }
 
 function imageAnchorXml(section, index) {
   const anchor = section.anchor || {};
-  const fromCol = anchor.fromCol ?? 0;
-  const fromRow = anchor.fromRow ?? 0;
-  const toCol = anchor.toCol ?? 8;
-  const toRow = anchor.toRow ?? 17;
+  const fromCol = anchor.fromCol ?? 0; const fromRow = anchor.fromRow ?? 0;
+  const toCol = anchor.toCol ?? 8; const toRow = anchor.toRow ?? 17;
   const safeName = xmlEscape(section.title || `Graph ${index}`);
   return `  <xdr:twoCellAnchor editAs="oneCell">
     <xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
@@ -2233,11 +2662,8 @@ function imageAnchorXml(section, index) {
 
 async function embedGraphImagesInWorkbook(zip, sections) {
   if(!sections || !sections.length) return;
-
-  const contentTypesPath = '[Content_Types].xml';
-  const sheetPath = 'xl/worksheets/sheet2.xml';
-  const sheetRelsPath = 'xl/worksheets/_rels/sheet2.xml.rels';
-  const drawingPath = 'xl/drawings/drawing2.xml';
+  const contentTypesPath = '[Content_Types].xml', sheetPath = 'xl/worksheets/sheet2.xml';
+  const sheetRelsPath = 'xl/worksheets/_rels/sheet2.xml.rels', drawingPath = 'xl/drawings/drawing2.xml';
   const drawingRelsPath = 'xl/drawings/_rels/drawing2.xml.rels';
   const relsRoot = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
 
@@ -2247,22 +2673,18 @@ async function embedGraphImagesInWorkbook(zip, sections) {
   zip.file(contentTypesPath, typesXml);
 
   let sheetXml = await zip.file(sheetPath).async('string');
-  if(!sheetXml.includes('xmlns:r=')) {
-    sheetXml = sheetXml.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
-  }
+  if(!sheetXml.includes('xmlns:r=')) sheetXml = sheetXml.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
+  
   let sheetRelsXml = zip.file(sheetRelsPath) ? await zip.file(sheetRelsPath).async('string') : relsRoot;
   const sheetDrawingRelId = nextRelId(sheetRelsXml);
   if(!sheetRelsXml.includes('drawings/drawing2.xml')) {
     sheetRelsXml = sheetRelsXml.replace('</Relationships>', `<Relationship Id="${sheetDrawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/></Relationships>`);
   }
   zip.file(sheetRelsPath, sheetRelsXml);
-  if(!sheetXml.includes('<drawing r:id=')) {
-    sheetXml = sheetXml.replace('</worksheet>', `<drawing r:id="${sheetDrawingRelId}"/></worksheet>`);
-  }
+  if(!sheetXml.includes('<drawing r:id=')) sheetXml = sheetXml.replace('</worksheet>', `<drawing r:id="${sheetDrawingRelId}"/></worksheet>`);
   zip.file(sheetPath, sheetXml);
 
-  const drawingRels = [];
-  const anchors = [];
+  const drawingRels = []; const anchors = [];
   for(let i = 0; i < sections.length; i++) {
     const base64 = await svgToPngBase64(graphSvg(sections[i]));
     const mediaName = `graph${i + 1}.png`;
@@ -2270,20 +2692,13 @@ async function embedGraphImagesInWorkbook(zip, sections) {
     drawingRels.push(`<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${mediaName}"/>`);
     anchors.push(imageAnchorXml(sections[i], i + 1));
   }
-  const drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-${anchors.join('\n')}
-</xdr:wsDr>`;
-  const drawingRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drawingRels.join('')}</Relationships>`;
-  zip.file(drawingPath, drawingXml);
-  zip.file(drawingRelsPath, drawingRelsXml);
+  zip.file(drawingPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${anchors.join('\n')}</xdr:wsDr>`);
+  zip.file(drawingRelsPath, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drawingRels.join('')}</Relationships>`);
 }
 
 async function embedLogoInWorkbook(zip, firstSheetName) {
-  const contentTypesPath = '[Content_Types].xml';
-  const sheetPath = 'xl/worksheets/sheet1.xml';
-  const sheetRelsPath = 'xl/worksheets/_rels/sheet1.xml.rels';
-  const drawingPath = 'xl/drawings/drawing1.xml';
+  const contentTypesPath = '[Content_Types].xml', sheetPath = 'xl/worksheets/sheet1.xml';
+  const sheetRelsPath = 'xl/worksheets/_rels/sheet1.xml.rels', drawingPath = 'xl/drawings/drawing1.xml';
   const drawingRelsPath = 'xl/drawings/_rels/drawing1.xml.rels';
   const relsRoot = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
 
@@ -2295,9 +2710,74 @@ async function embedLogoInWorkbook(zip, firstSheetName) {
   zip.file(contentTypesPath, typesXml);
 
   let sheetXml = await zip.file(sheetPath).async('string');
-  if(!sheetXml.includes('xmlns:r=')) {
-    sheetXml = sheetXml.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
+  if(!sheetXml.includes('xmlns:r=')) sheetXml = sheetXml.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ');
+
+  let sheetRelsXml = zip.file(sheetRelsPath) ? await zip.file(sheetRelsPath).async('string') : relsRoot;
+  const sheetDrawingRelId = nextRelId(sheetRelsXml);
+  if(!sheetRelsXml.includes('drawings/drawing1.xml')) {
+    sheetRelsXml = sheetRelsXml.replace('</Relationships>', `<Relationship Id="${sheetDrawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`);
   }
+  zip.file(sheetRelsPath, sheetRelsXml);
+  if(!sheetXml.includes('<drawing r:id=')) sheetXml = sheetXml.replace('</worksheet>', `<drawing r:id="${sheetDrawingRelId}"/></worksheet>`);
+  zip.file(sheetPath, sheetXml);
+
+  const safeName = xmlEscape(firstSheetName || 'Cattleya Eats Logo');
+  const drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <xdr:twoCellAnchor editAs="oneCell">
+    <xdr:from><xdr:col>2</xdr:col><xdr:colOff>320000</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>80000</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>480000</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>260000</xdr:rowOff></xdr:to>
+    <xdr:pic>
+      <xdr:nvPicPr><xdr:cNvPr id="2" name="${safeName}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>
+      <xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+      <xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>`;
+  zip.file(drawingPath, drawingXml);
+  zip.file(drawingRelsPath, '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/cattleya-logo.png"/></Relationships>');
+}
+
+async function writeWorkbookWithLogo(wb, fileName) {
+  const graphSections = wb.__graphSections || [];
+  delete wb.__graphSections;
+
+  if (typeof JSZip === 'undefined') {
+    XLSX.writeFile(wb, fileName, { bookType: 'xlsx' });
+    return;
+  }
+
+  try {
+    const workbookBytes = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const zip = await JSZip.loadAsync(workbookBytes);
+    await embedLogoInWorkbook(zip, wb.SheetNames[0]);
+    
+    if (graphSections && graphSections.length > 0) {
+      await embedChartsInWorkbook(zip, graphSections);
+      await embedGraphImagesInWorkbook(zip, graphSections);
+    }
+
+    const blob = await zip.generateAsync({ 
+      type: 'blob', 
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+    });
+    
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    
+  } catch (err) {
+    console.error("Export pipeline error:", err);
+    XLSX.writeFile(wb, fileName, { bookType: 'xlsx' });
+    toast('Error: Excel exported without logo/charts.', true);
+  }
+}
 
   let sheetRelsXml = zip.file(sheetRelsPath) ? await zip.file(sheetRelsPath).async('string') : relsRoot;
   const sheetDrawingRelId = nextRelId(sheetRelsXml);
@@ -2470,151 +2950,214 @@ function appendReportSheet(wb, sheetName, reportTitle, headers, dataRows, colWid
     ...dataRows,
     ...buildSignatureRows(signerLabel)
   ];
+  
   const ws = XLSX.utils.aoa_to_sheet(allRows);
   const lastCol = Math.max(headers.length - 1, 0);
-  ws['!cols'] = colWidths || headers.map(()=>({wch:16}));
+
+  ws['!cols'] = colWidths || headers.map(() => ({ wch: 16 }));
+  
   ws['!merges'] = [
-    {s:{r:0,c:0},e:{r:0,c:lastCol}},
-    {s:{r:1,c:0},e:{r:1,c:lastCol}},
-    {s:{r:2,c:0},e:{r:2,c:lastCol}},
-    {s:{r:3,c:0},e:{r:3,c:lastCol}},
+    { s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: lastCol } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: lastCol } },
   ];
+  
   applyReportHeaderLayout(ws, lastCol);
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   return ws;
 }
 
 function menuIngredientReportRows() {
-  const cat=document.getElementById('f-cat')?.value || '';
-  const ing=document.getElementById('f-ing')?.value || '';
-  const minQty=parseFloat(document.getElementById('f-qty')?.value)||0;
+  const catEl = document.getElementById('f-cat');
+  const ingEl = document.getElementById('f-ing');
+  const qtyEl = document.getElementById('f-qty');
+
+  const cat = catEl ? catEl.value : '';
+  const ing = ingEl ? ingEl.value : '';
+  const minQty = qtyEl ? parseFloat(qtyEl.value) || 0 : 0;
+  
   return MENU_DATA
-    .filter(r=>{ const c=getCat(r[1]); return(!cat||c===cat)&&(!ing||r[2]===ing)&&r[3]>=minQty; })
-    .map(r=>[r[0],r[1],r[2],r[3],catLabel(getCat(r[1]))]);
+    .filter(r => { 
+      const c = getCat(r[1]); 
+      return (!cat || c === cat) && (!ing || r[2] === ing) && (parseFloat(r[3]) || 0) >= minQty; 
+    })
+    .map(r => [
+      r[0], 
+      r[1], 
+      r[2], 
+      parseFloat(r[3]) || 0, 
+      catLabel(getCat(r[1]))
+    ]);
 }
 
 function orderReportRows() {
-  return ORDERS.map(o=>[
-    o.id, o.menuId, MENU_NAMES[o.menuId]||o.menuId, catLabel(o.category),
-    o.qty, o.customer, o.date, o.notes||'', o.status
+  return ORDERS.map(o => [
+    o.id, 
+    o.menuId, 
+    MENU_NAMES[o.menuId] || o.menuId, 
+    catLabel(o.category),
+    parseInt(o.qty) || 0,        
+    o.customer || 'Walk-In',    
+    o.date, 
+    o.notes || '',               
+    o.status || 'Completed'
   ]);
 }
 
 function restockReportRows() {
-  return RESTOCKS.map(r=>[
-    r.id, r.ingId, ING_NAMES[r.ingId]||r.ingId, r.qty, r.unit, r.supplier, r.receivedBy, r.date
+  return RESTOCKS.map(r => [
+    r.id,
+    r.ingId,
+    ING_NAMES[r.ingId] || r.ingId,
+    parseFloat(r.qty) || 0,     
+    r.unit || 'pcs',
+    r.supplier || '—',
+    r.receivedBy || 'Admin',
+    r.date
   ]);
 }
+
 
 async function exportOrdersExcel() {
+  if (!ORDERS || ORDERS.length === 0) {
+    toast("No order records available to export.", true);
+    return;
+  }
+
   const wb = XLSX.utils.book_new();
 
-  const headers = ['Order ID','Menu ID','Menu Name','Category','Quantity','Customer','Order Date','Notes','Status'];
-  const dataRows = ORDERS.map(o=>[
-    o.id, o.menuId, MENU_NAMES[o.menuId]||o.menuId, catLabel(o.category),
-    o.qty, o.customer, o.date, o.notes||'', o.status
-  ]);
-
-  const hdr = buildHeaderRows('Order Transactions Report');
-  const sig = buildSignatureRows();
-  const allRows = [...hdr, headers, ...dataRows, ...sig];
-
-  const ws1 = XLSX.utils.aoa_to_sheet(allRows);
-  ws1['!cols'] = [{wch:12},{wch:9},{wch:22},{wch:10},{wch:10},{wch:22},{wch:14},{wch:22},{wch:12}];
-  ws1['!merges'] = [
-    {s:{r:0,c:0},e:{r:0,c:8}},
-    {s:{r:1,c:0},e:{r:1,c:8}},
-    {s:{r:2,c:0},e:{r:2,c:8}},
-    {s:{r:3,c:0},e:{r:3,c:8}},
+  const headers = ['Order ID', 'Menu ID', 'Menu Name', 'Category', 'Quantity', 'Customer', 'Order Date', 'Notes', 'Status'];
+  const dataRows = orderReportRows(); 
+  const colWidths = [
+    { wch: 12 }, { wch: 9 }, { wch: 22 }, { wch: 10 }, 
+    { wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 22 }, { wch: 12 }
   ];
-  applyReportHeaderLayout(ws1, 8);
-  XLSX.utils.book_append_sheet(wb, ws1, 'Orders');
 
-  const categories = ['Chicken','Burger','Side'];
-  const catCounts = categories.map(c=>ORDERS.filter(o=>catLabel(o.category)===c).length);
-  const statuses = ['Pending','Completed','Cancelled'];
-  const statCounts = statuses.map(s=>ORDERS.filter(o=>o.status===s).length);
+  appendReportSheet(wb, 'Orders', 'Order Transactions Report', headers, dataRows, colWidths, 'Sales / Operations Manager');
+
+  const categories = ['Chicken', 'Burger', 'Side'];
+  const catCounts = categories.map(c => ORDERS.filter(o => catLabel(o.category) === c).length); 
+  const statuses = ['Pending', 'Completed', 'Cancelled'];
+  const statCounts = statuses.map(s => ORDERS.filter(o => o.status === s).length);
   buildGraphSheet(wb, 'Graphs', [
-    {title:'Orders by Category', labelHeader:'Category', valueHeader:'Count', rows:categories.map((c,i)=>[c,catCounts[i]])},
-    {title:'Orders by Status', labelHeader:'Status', valueHeader:'Count', rows:statuses.map((s,i)=>[s,statCounts[i]]), anchor:{fromRow:17,toRow:30}}
+    {
+      title: 'Orders by Category', 
+      labelHeader: 'Category', 
+      valueHeader: 'Count', 
+      rows: categories.map((c, i) => [c, parseInt(catCounts[i]) || 0])
+    },
+    {
+      title: 'Orders by Status', 
+      labelHeader: 'Status', 
+      valueHeader: 'Count', 
+      rows: statuses.map((s, i) => [s, parseInt(statCounts[i]) || 0]), 
+      anchor: { fromRow: 17, toRow: 30 }
+    }
   ]);
 
-  await writeWorkbookWithLogo(wb, `cattleya_orders_report_${today()}.xlsx`);
-  toast('Orders Excel report exported ✓');
+  try {
+    await writeWorkbookWithLogo(wb, `cattleya_orders_report_${today()}.xlsx`);
+    toast('Orders Excel report exported ✓');
+  } catch (err) {
+    console.error("Orders export pipeline error:", err);
+    toast("Orders export failed.", true);
+  }
 }
+
 
 async function exportRestockExcel() {
+  if (!RESTOCKS || RESTOCKS.length === 0) {
+    toast("No restock records available to export.", true);
+    return;
+  }
+
   const wb = XLSX.utils.book_new();
 
-  const headers = ['Restock ID','Ingredient ID','Ingredient Name','Qty Received','Unit','Supplier','Received By','Date'];
-  const dataRows = RESTOCKS.map(r=>[
-    r.id, r.ingId, ING_NAMES[r.ingId]||r.ingId, r.qty, r.unit, r.supplier, r.receivedBy, r.date
-  ]);
-
-  const hdr = buildHeaderRows('Ingredient Restock Report');
-  const sig = buildSignatureRows('Inventory / Receiving Officer');
-  const allRows = [...hdr, headers, ...dataRows, ...sig];
-
-  const ws1 = XLSX.utils.aoa_to_sheet(allRows);
-  ws1['!cols'] = [{wch:12},{wch:14},{wch:20},{wch:14},{wch:8},{wch:22},{wch:18},{wch:14}];
-  ws1['!merges'] = [
-    {s:{r:0,c:0},e:{r:0,c:7}},
-    {s:{r:1,c:0},e:{r:1,c:7}},
-    {s:{r:2,c:0},e:{r:2,c:7}},
-    {s:{r:3,c:0},e:{r:3,c:7}},
+  const headers = ['Restock ID', 'Ingredient ID', 'Ingredient Name', 'Qty Received', 'Unit', 'Supplier', 'Received By', 'Date'];
+  const dataRows = restockReportRows(); 
+  const colWidths = [
+    { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 14 }, 
+    { wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 14 }
   ];
-  applyReportHeaderLayout(ws1, 7);
-  XLSX.utils.book_append_sheet(wb, ws1, 'Restock Records');
+ 
+  appendReportSheet(wb, 'Restock Records', 'Ingredient Restock Report', headers, dataRows, colWidths, 'Inventory / Receiving Officer');
 
-  const ings = [...new Set(RESTOCKS.map(r=>r.ingId))];
-  const ingTotals = ings.map(i=>[ING_NAMES[i]||i, RESTOCKS.filter(r=>r.ingId===i).reduce((s,r)=>s+r.qty,0)]);
+  const ings = [...new Set(RESTOCKS.map(r => r.ingId))];
+  const ingTotals = ings.map(i => {
+    const totalQty = RESTOCKS.filter(r => r.ingId === i).reduce((sum, r) => sum + (parseFloat(r.qty) || 0), 0);
+    return [ING_NAMES[i] || i, totalQty];
+  });
+
   buildGraphSheet(wb, 'Graphs', [
-    {title:'Restock Quantity by Ingredient', labelHeader:'Ingredient', valueHeader:'Total Qty Received', rows:ingTotals}
+    {
+      title: 'Restock Quantity by Ingredient', 
+      labelHeader: 'Ingredient', 
+      valueHeader: 'Total Qty Received', 
+      rows: ingTotals
+    }
   ]);
 
-  await writeWorkbookWithLogo(wb, `cattleya_restock_report_${today()}.xlsx`);
-  toast('"Restock" done exporting!');
+  try {
+    await writeWorkbookWithLogo(wb, `cattleya_restock_report_${today()}.xlsx`);
+    toast('"Restock" report done exporting!');
+  } catch (err) {
+    console.error("Restocks export pipeline error:", err);
+    toast("Restock export failed.", true);
+  }
 }
 
-
 async function exportMenuIngredientsExcel() {
-  const cat=document.getElementById('f-cat').value;
-  const ing=document.getElementById('f-ing').value;
-  const minQty=parseFloat(document.getElementById('f-qty').value)||0;
-  const filtered=MENU_DATA.filter(r=>{ const c=getCat(r[1]); return(!cat||c===cat)&&(!ing||r[2]===ing)&&r[3]>=minQty; });
+  const catEl = document.getElementById('f-cat');
+  const ingEl = document.getElementById('f-ing');
+  const qtyEl = document.getElementById('f-qty');
+
+  const cat = catEl ? catEl.value : '';
+  const ing = ingEl ? ingEl.value : '';
+  const minQty = qtyEl ? parseFloat(qtyEl.value) || 0 : 0;
+  
+  const filtered = MENU_DATA.filter(r => { 
+    const c = getCat(r[1]); 
+    return (!cat || c === cat) && (!ing || r[2] === ing) && (parseFloat(r[3]) || 0) >= minQty; 
+  });
 
   const wb = XLSX.utils.book_new();
-
-  const headers = ['Menu Ingredient ID','Menu ID','Ingredient ID','Ingredient Quantity','Category'];
-  const dataRows = filtered.map(r=>[r[0],r[1],r[2],r[3],catLabel(getCat(r[1]))]);
-
-  const hdr = buildHeaderRows('Menu Ingredient Report');
-  const sig = buildSignatureRows('Menu / Operations Manager');
-  const allRows = [...hdr, headers, ...dataRows, ...sig];
-
-  const ws1 = XLSX.utils.aoa_to_sheet(allRows);
-  ws1['!cols'] = [{wch:20},{wch:10},{wch:14},{wch:20},{wch:12}];
-  ws1['!merges'] = [
-    {s:{r:0,c:0},e:{r:0,c:4}},
-    {s:{r:1,c:0},e:{r:1,c:4}},
-    {s:{r:2,c:0},e:{r:2,c:4}},
-    {s:{r:3,c:0},e:{r:3,c:4}},
-  ];
-  applyReportHeaderLayout(ws1, 4);
-  XLSX.utils.book_append_sheet(wb, ws1, 'Menu Ingredients');
-
-
-  const catGroups = ['Chicken','Burger','Side'];
-  const catCounts = catGroups.map(c=>filtered.filter(r=>catLabel(getCat(r[1]))===c).length);
+  const headers = ['Menu Ingredient ID', 'Menu ID', 'Ingredient ID', 'Ingredient Quantity', 'Category'];
+  const dataRows = menuIngredientReportRows(); 
+  const colWidths = [{ wch: 20 }, { wch: 12 }, { wch: 15 }, { wch: 20 }, { wch: 15 }];
+  appendReportSheet(wb, 'Menu Ingredients', 'Menu Ingredient Report', headers, dataRows, colWidths, 'Menu / Operations Manager');
+  const catGroups = ['Chicken', 'Burger', 'Side'];
+  const catCounts = catGroups.map(c => filtered.filter(r => catLabel(getCat(r[1])) === c).length);
+  
   const ingUsage = {};
-  filtered.forEach(r=>{ ingUsage[r[2]]=(ingUsage[r[2]]||0)+1; });
+  filtered.forEach(r => { 
+    if(r[2]) ingUsage[r[2]] = (ingUsage[r[2]] || 0) + 1; 
+  });
+
+
   buildGraphSheet(wb, 'Graphs', [
-    {title:'Records by Menu Category', labelHeader:'Category', valueHeader:'Record Count', rows:catGroups.map((c,i)=>[c,catCounts[i]])},
-    {title:'Ingredient Usage Frequency', labelHeader:'Ingredient ID', valueHeader:'Times Used', rows:Object.entries(ingUsage).sort((a,b)=>b[1]-a[1]), anchor:{fromRow:17,toRow:30}}
+    {
+      title: 'Records by Menu Category', 
+      labelHeader: 'Category', 
+      valueHeader: 'Record Count', 
+      rows: catGroups.map((c, i) => [c, parseInt(catCounts[i]) || 0])
+    },
+    {
+      title: 'Ingredient Usage Frequency', 
+      labelHeader: 'Ingredient ID', 
+      valueHeader: 'Times Used', 
+      rows: Object.entries(ingUsage).map(([id, val]) => [id, parseInt(val) || 0]).sort((a, b) => b[1] - a[1]), 
+      anchor: { fromRow: 17, toRow: 30 }
+    }
   ]);
 
-  await writeWorkbookWithLogo(wb, `cattleya_menuingredients_report_${today()}.xlsx`);
-  toast('"Menu Ingredients" done exporting!');
+  try {
+    await writeWorkbookWithLogo(wb, `cattleya_menuingredients_report_${today()}.xlsx`);
+    toast('"Menu Ingredients" done exporting ✓');
+  } catch (err) {
+    console.error("Failed executing workbook.", err);
+    toast("Failed to export.", true);
+  }
 }
 
 filterReport();
