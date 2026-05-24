@@ -1594,25 +1594,24 @@ async function loadRestocks() {
   renderRestocks();
 }
 
-const MENU_DATA = [
-  ['MI001','C01','I01',1.00],['MI002','C01','I05',50.00],['MI003','C02','I01',2.00],
-  ['MI004','C02','I05',100.00],['MI005','C03','I01',1.00],['MI006','C03','I05',50.00],
-  ['MI007','C03','I07',150.00],['MI008','C04','I01',1.00],['MI009','C04','I11',0.20],
-  ['MI010','C04','I12',50.00],['MI011','C05','I01',1.00],['MI012','C05','I06',0.15],
-  ['MI013','C05','I05',50.00],['MI014','B01','I03',1.00],['MI015','B01','I04',1.00],
-  ['MI016','B01','I10',1.00],['MI017','B02','I03',1.00],['MI018','B02','I04',1.00],
-  ['MI019','B02','I08',20.00],['MI020','B02','I10',1.00],['MI021','B03','I02',1.00],
-  ['MI022','B03','I04',1.00],['MI023','B03','I10',1.00],['MI024','B04','I03',1.00],
-  ['MI025','B04','I04',1.00],['MI026','B04','I06',0.15],['MI027','B04','I10',1.00],
-  ['MI028','B05','I03',1.00],['MI029','B05','I04',1.00],['MI030','B05','I06',0.15],
-  ['MI031','B05','I08',20.00],['MI032','B05','I10',1.00],['MI033','B06','I02',1.00],
-  ['MI034','B06','I04',1.00],['MI035','B06','I06',0.15],['MI036','B06','I10',1.00],
-  ['MI037','S01','I06',0.20],['MI038','S02','I07',150.00],['MI039','S02','I08',20.00],
-  ['MI040','S02','I09',20.00],['MI041','S03','I07',200.00]
-];
+let MENU_DATA = [];
+let ING_NAMES = {};
+let MENU_NAMES = {};
 
-const ING_NAMES = {I01:'Chicken Piece',I02:'Beef Patty',I03:'Bun',I04:'Lettuce',I05:'Batter Mix',I06:'Sauce',I07:'Rice',I08:'Pickle',I09:'Onion',I10:'Tomato',I11:'Cheese',I12:'Seasoning'};
-const MENU_NAMES = {C01:'Original Chicken',C02:'Spicy Chicken',C03:'Grilled Chicken',C04:'Crispy Chicken',C05:'Butter Chicken',B01:'Classic Burger',B02:'Cheese Burger',B03:'BBQ Burger',B04:'Mushroom Burger',B05:'Double Burger',B06:'Veggie Burger',S01:'Garden Salad',S02:'Fries',S03:'Coleslaw'};
+window.addEventListener('DOMContentLoaded', () => {
+    fetch('fetch_menu_ingredients.php')
+        .then(res => res.json())
+        .then(data => {
+  
+            MENU_DATA = data.MENU_DATA;
+            ING_NAMES = data.ING_NAMES;
+            MENU_NAMES = data.MENU_NAMES;
+
+            console.log("Database recipes loaded successfully!");
+          
+        })
+        .catch(err => console.error('Error fetching database recipe elements:', err));
+});
 
 function today() { return new Date().toISOString().split('T')[0]; }
 function getCat(menuId) { return menuId[0]; }
